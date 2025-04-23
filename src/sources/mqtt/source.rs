@@ -1,8 +1,8 @@
 use itertools::Itertools;
+use rumqttc::{Event as MqttEvent, Incoming, Publish, QoS};
 use vector_lib::config::LogNamespace;
 use vector_lib::internal_event::EventsReceived;
-
-use rumqttc::{Event as MqttEvent, Incoming, Publish, QoS};
+use vector_lib::lookup::{owned_value_path, path};
 
 use crate::{
     codecs::Decoder,
@@ -78,6 +78,8 @@ impl MqttSource {
         let events_received = register!(EventsReceived);
 
         let (batch, _batch_receiver) = BatchNotifier::maybe_new_with_receiver(false);
+
+        let topic = publish.topic;
         // Error is logged by `crate::codecs::Decoder`, no further handling
         // is needed here.
         let decoded = util::decode_message(
@@ -89,6 +91,23 @@ impl MqttSource {
             self.log_namespace,
             &events_received,
         )
+        .map(|event| {
+            match event {
+                vector_lib::event::Event::Log(mut log) => {
+                    self.log_namespace.insert_source_metadata(
+                        "mqtt",
+                        &mut log,
+                        Some(vector_lib::config::LegacyKey::InsertIfEmpty(
+                            &owned_value_path!("topic"),
+                        )),
+                        path!("topic"),
+                        topic.clone(),
+                    );
+                    vector_lib::event::Event::Log(log)
+                }
+                _ => panic!(),
+            }
+        })
         .collect_vec();
 
         let count = decoded.len();
